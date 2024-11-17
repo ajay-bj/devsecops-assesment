@@ -1,0 +1,76 @@
+version: 0.2
+
+env:
+  variables:
+    SONAR_HOST_URL: "http://54.160.16.113:9000/"
+    SONAR_TOKEN: "squ_2a1acbdc7256116ab1f89e4e8339f7c8f0c78efb"
+    ECR_REPOSITORY_URI: "905418153772.dkr.ecr.us-east-1.amazonaws.com/codebuild-api"
+    AWS_REGION: "us-east-1"
+    TRIVY_VERSION: "0.22.0"
+    SONAR_SCANNER_VERSION: "4.6.2.2472"
+
+phases:
+  install:
+    commands:
+      # Start Docker daemon in the background
+      - nohup /usr/local/bin/dockerd --host=unix:///var/run/docker.sock --host=tcp://127.0.0.1:2375 --storage-driver=overlay2 &
+      
+      # Wait until Docker is ready
+      - timeout 15 sh -c "until docker info; do echo .; sleep 1; done"
+
+      # Install Trivy
+      - echo "Installing Trivy"
+      - curl -sSL https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz | tar -xz -C /usr/local/bin
+
+      # Install Sonar Scanner
+      - echo "Installing Sonar Scanner"
+      - curl -sSLo sonar-scanner.zip https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SONAR_SCANNER_VERSION}-linux.zip
+      - unzip sonar-scanner.zip -d /opt/sonar-scanner
+
+  pre_build:
+    commands:
+      # Retrieve authentication token and authenticate Docker to ECR
+      - echo "Logging into Amazon ECR"
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REPOSITORY_URI
+
+      # Set up environment variables for SonarQube
+      - echo "Setting up environment variables for SonarQube"
+      - export SONAR_SCANNER_HOME=/opt/sonar-scanner/sonar-scanner-${SONAR_SCANNER_VERSION}-linux
+      - export PATH=$PATH:$SONAR_SCANNER_HOME/bin
+
+  build:
+    commands:
+      # Run SonarQube Scan
+      - echo "Running SonarQube Scan"
+      - sonar-scanner -Dsonar.projectKey=codebuild-api -Dsonar.sources=. -Dsonar.host.url=$SONAR_HOST_URL -Dsonar.login=$SONAR_TOKEN
+
+      # Build Docker image from the Dockerfile in the 'web' directory
+      - echo "Building Docker image"
+      - docker build -t codebuild-api -f api/Dockerfile api/
+
+
+      # Tag Docker image for ECR
+      - echo "Tagging Docker image"
+      - docker tag codebuild-api:latest $ECR_REPOSITORY_URI:latest
+
+      # List Docker images
+      - echo "Listing Docker images"
+      - docker images
+
+      # Push Docker image to ECR
+      - echo "Pushing Docker image to ECR"
+      - docker push $ECR_REPOSITORY_URI:latest
+
+  post_build:
+    commands:
+      # Run Trivy security scan
+      - echo "Running Trivy security scan"
+      - if docker image inspect $ECR_REPOSITORY_URI:latest > /dev/null 2>&1; then
+          trivy image --format json --output trivy-report.json $ECR_REPOSITORY_URI:latest;
+        else
+          echo "Docker image not found, skipping Trivy scan";
+        fi
+
+      # Upload Trivy scan report to S3
+      - echo "Uploading Trivy scan report to S3"
+      - aws s3 cp trivy-report.json s3://api-trivy-reports/trivy-reports/${CODEBUILD_RESOLVED_SOURCE_VERSION}/trivy-report.json
