@@ -73,4 +73,4 @@ phases:
 
       # Upload Trivy scan report to S3
       - echo "Uploading Trivy scan report to S3"
-      - aws s3 cp trivy-report.json s3://test-trivy-reports/trivy-reports/${CODEBUILD_RESOLVED_SOURCE_VERSION}/trivy-report.json
+      - aws s3 cp trivy-report.json s3://web-trivy-reports/trivy-reports/${CODEBUILD_RESOLVED_SOURCE_VERSION}/trivy-report.json
