@@ -1,0 +1,32 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo Installing Trivy...
+      - docker pull aquasec/trivy
+      - echo Installing Sonar Scanner...
+      - docker pull sonarsource/sonar-scanner-cli
+
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - $(aws ecr get-login --no-include-email --region $AWS_DEFAULT_REGION)
+      - export SONAR_HOST_URL="http://your-sonarqube-host-url"
+      - export EKS_CLUSTER_NAME="your-cluster-name"
+      - export ECR_REPOSITORY_URI="your-ecr-repo-uri"
+
+  build:
+    commands:
+      - echo Running SonarQube scan...
+      - sonar-scanner
+      - echo Building Docker image...
+      - docker build -t $ECR_REPOSITORY_URI:$IMAGE_TAG .
+      - echo Running Trivy security scan...
+      - trivy image --format template --template "@trivy-reports.tpl" -o trivy-report.html $ECR_REPOSITORY_URI:$IMAGE_TAG
+      - echo Pushing Docker image...
+      - docker push $ECR_REPOSITORY_URI:$IMAGE_TAG
+
+artifacts:
+  files:
+    - trivy-report.html
